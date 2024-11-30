@@ -14,7 +14,7 @@ import torch.nn.functional as F
 
 
 # setup environment
-env = gym.make("CartPole-v1")
+env = gym.make("CartPole-v1", render_mode="human")  # Added render_mode
 
 # set up matplotlib
 is_ipython = "inline" in matplotlib.get_backend()
@@ -27,11 +27,10 @@ plt.ion()
 device = torch.device(
     "cuda"
     if torch.cuda.is_available()
-    else "mps" if torch.backend.mps.is_available() else "cpu"
+    else "mps" if torch.backends.mps.is_available() else "cpu"
 )
 
-# Using replay memory for training our DQN. It stores the trainsistions that the agent observes, allowing us to reuse the data later.
-
+# Using replay memory for training our DQN
 Transition = namedtuple("Transition", ("state", "action", "next_state", "reward"))
 
 
@@ -50,29 +49,20 @@ class ReplayMemory(object):
         return len(self.memory)
 
 
-# now let's define our model
-# What is DQN?
-## A Deep Q-Network is defined as a model that combines Q-learning with a deep CNN to train a network to approximate the value of the Q function, which maps state-action pairs to their expected discounted return.
-
-
 class DQN(nn.Module):
-
     def __init__(self, n_observations, n_actions):
         super(DQN, self).__init__()
-        self.layer1 = nn.Linear(n_observations, 128):
+        self.layer1 = nn.Linear(n_observations, 128)
         self.layer2 = nn.Linear(128, 128)
         self.layer3 = nn.Linear(128, n_actions)
 
-    
-    # called with either one element one element to determine next action or a batch during optimization.
-    # Return tensor([[left0exp, right0exp]...])
     def forward(self, x):
         x = F.relu(self.layer1(x))
         x = F.relu(self.layer2(x))
         return self.layer3(x)
 
-# Training
 
+# Training Hyperparameters
 BATCH_SIZE = 128
 GAMMA = 0.99
 EPS_START = 0.9
@@ -97,36 +87,37 @@ memory = ReplayMemory(10000)
 
 step_done = 0
 
+
 def select_action(state):
     global step_done
     sample = random.random()
-    eps_threshold = EPS_END + (EPS_START - EPS_END) * \
-        math.exp(-1. * step_done / EPS_DECAY)
+    eps_threshold = EPS_END + (EPS_START - EPS_END) * math.exp(
+        -1.0 * step_done / EPS_DECAY
+    )
 
     step_done += 1
     if sample > eps_threshold:
         with torch.no_grad():
-            # t.max(1) will return the largest column value of each row.
-            # second column on max result is index of where max element was
-            # found, so we pick action with the larger expected reward.
             return policy_net(state).max(1).indices.view(1, 1)
-        
     else:
-        return torch.tensor([[env.action_space.sample()]], device=device, dtype=torch.long)
-    
+        return torch.tensor(
+            [[env.action_space.sample()]], device=device, dtype=torch.long
+        )
+
 
 episode_durations = []
+
 
 def plot_duration(show_result=False):
     plt.figure(1)
     durations_t = torch.tensor(episode_durations, dtype=torch.float)
     if show_result:
-        plt.title('Result')
+        plt.title("Result")
     else:
         plt.clf()
-        plt.title('Training...')
-    plt.xlabel('Episode')
-    plt.ylabel('Duration')
+        plt.title("Training...")
+    plt.xlabel("Episode")
+    plt.ylabel("Duration")
     plt.plot(durations_t.numpy())
     # Take 100 episode averages and plot them too
     if len(durations_t) >= 100:
@@ -142,19 +133,21 @@ def plot_duration(show_result=False):
         else:
             display.display(plt.gcf())
 
-# Training Loop
 
 def optimize_model():
     if len(memory) < BATCH_SIZE:
         return
     transitions = memory.sample(BATCH_SIZE)
 
-    # transpose the batch. This converts batch-array of Transitions to Transitions of batch-arrays
+    # transpose the batch
     batch = Transition(*zip(*transitions))
 
-    # compute a mask of non-final states and concatenate the batch elements
-    # (a final state would've been the one after which simulation ended)
-    non_final_mask = torch.tesor(tuple(map(lambda s: s is not None, batch.next_state)), device=device, dtype=torch.bool)
+    # compute a mask of non-final states
+    non_final_mask = torch.tensor(
+        tuple(map(lambda s: s is not None, batch.next_state)),
+        device=device,
+        dtype=torch.bool,
+    )
 
     non_final_next_states = torch.cat([s for s in batch.next_state if s is not None])
     state_batch = torch.cat(batch.state)
@@ -164,11 +157,13 @@ def optimize_model():
     # compute Q(s_t, a)
     state_action_values = policy_net(state_batch).gather(1, action_batch)
 
-    # compute V(s_{t+1}) for all next states.
+    # compute V(s_{t+1}) for all next states
     next_state_values = torch.zeros(BATCH_SIZE, device=device)
     with torch.no_grad():
-        next_state_values[non_final_mask] = target_net(non_final_next_states).max(1).values
-    
+        next_state_values[non_final_mask] = (
+            target_net(non_final_next_states).max(1).values
+        )
+
     # compute the expected Q values
     expected_state_action_values = (next_state_values * GAMMA) + reward_batch
 
@@ -181,16 +176,18 @@ def optimize_model():
     loss.backward()
 
     # in-place gradient clipping
-    torch.nn.utils.clip_grad_value_(policy_net.parameters() * 100)
+    torch.nn.utils.clip_grad_value_(policy_net.parameters(), 100)
     optimizer.step()
 
 
+# Determine number of episodes based on device
 if torch.cuda.is_available() or torch.backends.mps.is_available():
     num_episodes = 600
 else:
-    num_episodes = 50
+    num_episodes = 500
 
 
+# Training Loop
 for i_episode in range(num_episodes):
     # initialize the environment and get its state
     state, info = env.reset()
@@ -204,31 +201,55 @@ for i_episode in range(num_episodes):
         if terminated:
             next_state = None
         else:
-            next_state = torch.tensor(observation, dtype=torch.float32, device=device).unsqueeze(0)
-        
+            next_state = torch.tensor(
+                observation, dtype=torch.float32, device=device
+            ).unsqueeze(0)
+
         # store the transition in memory
         memory.push(state, action, next_state, reward)
 
-        # omve to the next state
+        # move to the next state
         state = next_state
 
         # perform one step of the optimization
         optimize_model()
 
-        # soft update of the target network's weight
+        # soft update of the target network's weights
         target_net_state_dict = target_net.state_dict()
         policy_net_state_dict = policy_net.state_dict()
         for key in policy_net_state_dict:
-            target_net_state_dict[key] = policy_net_state_dict[key]*TAU + target_net_state_dict[key]*(1-TAU)
-        
+            target_net_state_dict[key] = policy_net_state_dict[
+                key
+            ] * TAU + target_net_state_dict[key] * (1 - TAU)
+
         target_net.load_state_dict(target_net_state_dict)
 
         if done:
             episode_durations.append(t + 1)
             plot_duration()
             break
-    
-print("Complete")
+
+print("Training Complete")
 plot_duration(show_result=True)
 plt.ioff()
-plt.show()
+
+# Rendering the trained agent
+print("Rendering the trained agent...")
+render_env = gym.make("CartPole-v1", render_mode="human")
+for _ in range(10):  # Render 10 episodes
+    state, info = render_env.reset()
+    state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
+
+    for t in count():
+        action = select_action(state)
+        observation, reward, terminated, truncated, _ = render_env.step(action.item())
+
+        if terminated or truncated:
+            print(f"Episode finished after {t+1} timesteps")
+            break
+
+        state = torch.tensor(observation, dtype=torch.float32, device=device).unsqueeze(
+            0
+        )
+
+render_env.close()
